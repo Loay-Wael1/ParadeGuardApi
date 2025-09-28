@@ -25,6 +25,13 @@ namespace ParadeGuard.Api
         {
             var builder = WebApplication.CreateBuilder(args);
 
+            // Configure Kestrel for Railway deployment
+            var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+            builder.WebHost.ConfigureKestrel(options =>
+            {
+                options.ListenAnyIP(int.Parse(port));
+            });
+
             // Enhanced Serilog configuration with correlation IDs
             Log.Logger = new LoggerConfiguration()
                 .ReadFrom.Configuration(builder.Configuration)
@@ -48,10 +55,12 @@ namespace ParadeGuard.Api
             // Validate critical configuration and read from environment variables
             var apiKeysSection = builder.Configuration.GetSection("ApiKeys");
             var geocodingKey = apiKeysSection["GeocodingApiKey"] ??
-                              Environment.GetEnvironmentVariable("GeocodingApiKey");
+                              Environment.GetEnvironmentVariable("GeocodingApiKey") ??
+                              Environment.GetEnvironmentVariable("PARADE_GUARD_GEOCODING_API_KEY");
 
             var nasaKey = apiKeysSection["NasaApiKey"] ??
-                         Environment.GetEnvironmentVariable("NasaApiKey");
+                         Environment.GetEnvironmentVariable("NasaApiKey") ??
+                         Environment.GetEnvironmentVariable("PARADE_GUARD_NASA_API_KEY");
 
             // Validate both required API keys
             var missingKeys = new List<string>();
@@ -74,6 +83,11 @@ namespace ParadeGuard.Api
                 }
                 Console.WriteLine("Both API keys are required for this application to function properly.");
                 Console.WriteLine("Please set them using environment variables or configuration files.");
+                Console.WriteLine("Environment variables checked:");
+                Console.WriteLine("  - GeocodingApiKey");
+                Console.WriteLine("  - PARADE_GUARD_GEOCODING_API_KEY");
+                Console.WriteLine("  - NasaApiKey");
+                Console.WriteLine("  - PARADE_GUARD_NASA_API_KEY");
                 Console.WriteLine("================================\n");
 
                 throw new InvalidOperationException($"Missing required API keys: {string.Join(", ", missingKeys)}");
@@ -175,7 +189,7 @@ namespace ParadeGuard.Api
                 };
             });
 
-            // Enhanced API Documentation - Fixed Swagger configuration
+            // Enhanced API Documentation
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(c =>
             {
@@ -212,7 +226,6 @@ namespace ParadeGuard.Api
                 {
                     c.IncludeXmlComments(xmlPath);
                 }
-
             });
 
             // Comprehensive Health Checks
@@ -234,18 +247,19 @@ namespace ParadeGuard.Api
                 })
                 .AddCheck("configuration", () =>
                 {
-                    var config = builder.Configuration;
-                    var required = new[] { "ApiKeys:GeocodingApiKey", "ApiSettings:NasaBaseUrl", "ApiSettings:OpenCageBaseUrl" };
+                    // Check environment variables for Railway deployment
+                    var geocodingKeyCheck = Environment.GetEnvironmentVariable("GeocodingApiKey") ??
+                                          Environment.GetEnvironmentVariable("PARADE_GUARD_GEOCODING_API_KEY");
+                    var nasaKeyCheck = Environment.GetEnvironmentVariable("NasaApiKey") ??
+                                     Environment.GetEnvironmentVariable("PARADE_GUARD_NASA_API_KEY");
 
-                    foreach (var key in required)
-                    {
-                        if (string.IsNullOrWhiteSpace(config[key]))
-                        {
-                            return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Unhealthy($"Missing configuration: {key}");
-                        }
-                    }
+                    if (string.IsNullOrWhiteSpace(geocodingKeyCheck))
+                        return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Unhealthy("Missing GeocodingApiKey environment variable");
 
-                    return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy();
+                    if (string.IsNullOrWhiteSpace(nasaKeyCheck))
+                        return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Unhealthy("Missing NasaApiKey environment variable");
+
+                    return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("All required environment variables configured");
                 });
 
             // Enhanced Rate Limiting
@@ -319,7 +333,7 @@ namespace ParadeGuard.Api
             app.UseResponseCompression();
             app.UseMiddleware<ErrorHandlingMiddleware>();
 
-            // Security headers
+            // Security headers (not in development)
             if (!app.Environment.IsDevelopment())
             {
                 app.UseHsts();
@@ -333,14 +347,18 @@ namespace ParadeGuard.Api
                 });
             }
 
+            // Enable Swagger for both Development and Production (for initial testing)
+            // You can remove this in production later if needed
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "ParadeGuard API v1");
+                c.RoutePrefix = string.Empty; // Serve Swagger UI at root
+            });
+
+            // CORS configuration
             if (app.Environment.IsDevelopment())
             {
-                app.UseSwagger();
-                app.UseSwaggerUI(c =>
-                {
-                    c.SwaggerEndpoint("/swagger/v1/swagger.json", "ParadeGuard API v1");
-                    c.RoutePrefix = string.Empty; // Serve Swagger UI at root
-                });
                 app.UseCors("DevelopmentPolicy");
             }
             else
@@ -348,7 +366,12 @@ namespace ParadeGuard.Api
                 app.UseCors("DefaultPolicy");
             }
 
-            app.UseHttpsRedirection();
+            // HTTPS Redirection only in development (Railway handles HTTPS at load balancer level)
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseHttpsRedirection();
+            }
+
             app.UseRateLimiter();
             app.UseAuthorization();
             app.MapControllers();
@@ -363,6 +386,8 @@ namespace ParadeGuard.Api
                     {
                         status = report.Status.ToString(),
                         totalDuration = report.TotalDuration.TotalMilliseconds,
+                        environment = app.Environment.EnvironmentName,
+                        timestamp = DateTime.UtcNow,
                         entries = report.Entries.Select(e => new
                         {
                             name = e.Key,
@@ -378,7 +403,8 @@ namespace ParadeGuard.Api
 
             try
             {
-                Log.Information("Starting ParadeGuard API on {Environment}", app.Environment.EnvironmentName);
+                Log.Information("Starting ParadeGuard API on {Environment} - Port: {Port}",
+                    app.Environment.EnvironmentName, port);
                 app.Run();
             }
             catch (Exception ex)
