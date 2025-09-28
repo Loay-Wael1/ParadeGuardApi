@@ -195,13 +195,13 @@ namespace ParadeGuard.Api
             {
                 c.SwaggerDoc("v1", new OpenApiInfo
                 {
-                    Title = "ParadeGuard Weather API",
+                    Title = "Racla Cast Weather API",
                     Version = "v1.0",
                     Description = "Advanced weather prediction API for outdoor events using historical NASA POWER data",
                     Contact = new OpenApiContact
                     {
-                        Name = "ParadeGuard Support",
-                        Email = "support@paradeguard.com"
+                        Name = "Racla Cast Support",
+                        Email = "Loayw842@gmail.com"
                     },
                     License = new OpenApiLicense
                     {
@@ -304,7 +304,7 @@ namespace ParadeGuard.Api
                 options.AddPolicy("DefaultPolicy", policy =>
                 {
                     var allowedOrigins = builder.Configuration.GetSection("ApiSettings:AllowedOrigins").Get<string[]>()
-                        ?? new[] { "https://localhost:3000", "https://paradeguard.com" };
+                        ?? new[] { "https://localhost:3000", "https://paradeguard.com" , " http://localhost:5173 ", " https://paradeguardapi-production.up.railway.app" };
 
                     policy.WithOrigins(allowedOrigins)
                           .WithMethods("GET", "POST", "OPTIONS")
