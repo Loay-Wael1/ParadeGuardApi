@@ -304,7 +304,7 @@ namespace ParadeGuard.Api
                 options.AddPolicy("DefaultPolicy", policy =>
                 {
                     var allowedOrigins = builder.Configuration.GetSection("ApiSettings:AllowedOrigins").Get<string[]>()
-                        ?? new[] { "https://localhost:3000", "https://paradeguard.com" , " http://localhost:5173 ", " https://paradeguardapi-production.up.railway.app" };
+                        ?? new[] { "https://localhost:3000", "https://paradeguard.com", " http://localhost:5173 ", " https://paradeguardapi-production.up.railway.app" };
 
                     policy.WithOrigins(allowedOrigins)
                           .WithMethods("GET", "POST", "OPTIONS")

@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+
 namespace ParadeGuard.Api.Models
 {
     public class WeatherResult
@@ -21,27 +22,42 @@ namespace ParadeGuard.Api.Models
         public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
 
         /// <summary>
-        /// List of historical days that matched the requested weather condition
+        /// Complete list of all 40 historical days with full weather data
         /// </summary>
-        public List<MatchingWeatherDay> MatchingDays { get; set; } = new();
+        [JsonPropertyName("allDays")]
+        public List<HistoricalWeatherDay> AllDays { get; set; } = new();
+
+        /// <summary>
+        /// Count of days that matched extreme weather conditions
+        /// </summary>
+        public int ExtremeWeatherDaysCount { get; set; }
     }
 
-    public class MatchingWeatherDay
+    public class HistoricalWeatherDay
     {
         public DateTime Date { get; set; }
         public int Year { get; set; }
-        public double Value { get; set; }
-        public double Threshold { get; set; }
-        public string WeatherType { get; set; } = "";
-        public string Unit { get; set; } = "";
-        public WeatherDayContext? Context { get; set; }
-    }
 
-    public class WeatherDayContext
-    {
+        [JsonPropertyName("temp")]
         public double? Temperature { get; set; }
+
+        [JsonPropertyName("precip")]
         public double? Precipitation { get; set; }
+
+        [JsonPropertyName("windSpeed")]
         public double? WindSpeed { get; set; }
+
+        [JsonPropertyName("humidity")]
         public double? Humidity { get; set; }
+
+        /// <summary>
+        /// Auto-classified weather condition for this day
+        /// </summary>
+        public string Classification { get; set; } = "";
+
+        /// <summary>
+        /// Indicates if this day had extreme weather
+        /// </summary>
+        public bool IsExtremeWeather { get; set; }
     }
 }

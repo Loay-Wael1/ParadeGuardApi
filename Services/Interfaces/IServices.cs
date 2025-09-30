@@ -14,7 +14,8 @@ namespace ParadeGuard.Api.Services.Interfaces
 
     public interface IProbabilityCalculator
     {
-        (string label, double probability, int observations, string description, WeatherStats stats, List<MatchingWeatherDay> matchingDays) Calculate(
-            List<WeatherData> historical, DateTime targetDate, WeatherType weatherType, double? threshold);
+        (string label, double probability, int observations, string description,
+         WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
+        CalculateAutomatic(List<WeatherData> historical, DateTime targetDate);
     }
 }

@@ -1,45 +1,48 @@
-﻿using ParadeGuard.Api.Services;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
-public class UserQuery
+namespace ParadeGuard.Api.Models
 {
-    [StringLength(100, MinimumLength = 2, ErrorMessage = "Location name must be between 2 and 100 characters")]
-    public string? LocationName { get; set; }
-
-    [Range(-90, 90, ErrorMessage = "Latitude must be between -90 and 90")]
-    public double? Latitude { get; set; }
-
-    [Range(-180, 180, ErrorMessage = "Longitude must be between -180 and 180")]
-    public double? Longitude { get; set; }
-
-    [Required(ErrorMessage = "Target date is required")]
-    public DateTime TargetDate { get; set; }
-
-    [Required(ErrorMessage = "Weather type is required")]
-    [EnumDataType(typeof(WeatherType), ErrorMessage = "Invalid weather type")]
-    public WeatherType WeatherType { get; set; } = WeatherType.VeryHot;
-
-    [Range(0, double.MaxValue, ErrorMessage = "Threshold must be positive")]
-    public double? Threshold { get; set; }
-
-    [Range(1, 40, ErrorMessage = "Years must be between 1 and 40")]
-    public int Years { get; set; } = 30;
-
-    public bool IsValid()
+    public class UserQuery
     {
-        return (Latitude.HasValue && Longitude.HasValue) || !string.IsNullOrWhiteSpace(LocationName);
-    }
+        /// <summary>
+        /// Location name - required if coordinates are not provided
+        /// If provided, will be geocoded to get coordinates
+        /// </summary>
+        [StringLength(100, MinimumLength = 2, ErrorMessage = "Location name must be between 2 and 100 characters")]
+        public string? LocationName { get; set; }
 
-    public double GetEffectiveThreshold()
-    {
-        if (Threshold.HasValue) return Threshold.Value;
-        return WeatherType switch
+        /// <summary>
+        /// Latitude coordinate - optional if LocationName is provided
+        /// </summary>
+        [Range(-90, 90, ErrorMessage = "Latitude must be between -90 and 90")]
+        public double? Latitude { get; set; }
+
+        /// <summary>
+        /// Longitude coordinate - optional if LocationName is provided
+        /// </summary>
+        [Range(-180, 180, ErrorMessage = "Longitude must be between -180 and 180")]
+        public double? Longitude { get; set; }
+
+        /// <summary>
+        /// Target date for weather prediction (optional - defaults to today)
+        /// </summary>
+        public DateTime? TargetDate { get; set; }
+
+        /// <summary>
+        /// Validates that either LocationName or both coordinates are provided
+        /// </summary>
+        public bool IsValid()
         {
-            WeatherType.VeryHot => 35.0,
-            WeatherType.VeryCold => 5.0,
-            WeatherType.VeryWet => 10.0,
-            WeatherType.VeryWindy => 10.0,
-            _ => 0.0
-        };
+            return !string.IsNullOrWhiteSpace(LocationName) ||
+                   (Latitude.HasValue && Longitude.HasValue);
+        }
+
+        /// <summary>
+        /// Gets the effective target date (uses today if not specified)
+        /// </summary>
+        public DateTime GetEffectiveTargetDate()
+        {
+            return TargetDate ?? DateTime.Today;
+        }
     }
 }

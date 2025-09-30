@@ -5,145 +5,131 @@ namespace ParadeGuard.Api.Services
 {
     public class ProbabilityCalculator : IProbabilityCalculator
     {
-        public (string label, double probability, int observations, string description, WeatherStats stats, List<MatchingWeatherDay> matchingDays) Calculate(
-            List<WeatherData> historical,
-            DateTime targetDate,
-            WeatherType weatherType,
-            double? threshold)
+        // Fixed thresholds for automatic classification
+        private const double HOT_THRESHOLD = 35.0;   // °C
+        private const double COLD_THRESHOLD = 5.0;   // °C
+        private const double WET_THRESHOLD = 10.0;   // mm
+        private const double WINDY_THRESHOLD = 10.0; // m/s
+
+        public (string label, double probability, int observations, string description,
+                WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
+            CalculateAutomatic(List<WeatherData> historical, DateTime targetDate)
         {
+            // Filter data for the same month/day across all years
             var relevantData = historical
                 .Where(d => d.Date.Month == targetDate.Month && d.Date.Day == targetDate.Day)
+                .OrderByDescending(d => d.Date.Year)
                 .ToList();
 
             var totalObservations = relevantData.Count;
 
             if (totalObservations == 0)
             {
-                return ("NoData", 0.0, 0, "No historical data available for this date.", null, new List<MatchingWeatherDay>());
+                return ("NoData", 0.0, 0, "No historical data available for this date.",
+                       null, new List<HistoricalWeatherDay>(), 0);
             }
 
-            var (conditionCount, actualThreshold, description, matchingDays) = CountConditionMatches(relevantData, weatherType, threshold);
-            var probability = Math.Round((double)conditionCount / totalObservations * 100.0, 2);
+            // Convert all days to HistoricalWeatherDay with automatic classification
+            var allDays = relevantData.Select(d => {
+                var classification = ClassifyWeather(d);
+                return new HistoricalWeatherDay
+                {
+                    Date = d.Date,
+                    Year = d.Date.Year,
+                    Temperature = d.Temperature,
+                    Precipitation = d.Precipitation,
+                    WindSpeed = d.WindSpeed,
+                    Humidity = d.Humidity,
+                    Classification = classification,
+                    IsExtremeWeather = classification != "Normal"
+                };
+            }).ToList();
+
+            // Count extreme weather occurrences
+            var extremeWeatherDays = allDays.Where(d => d.IsExtremeWeather).ToList();
+            var extremeCount = extremeWeatherDays.Count;
+
+            // Determine dominant weather pattern
+            var weatherCounts = allDays
+                .GroupBy(d => d.Classification)
+                .Select(g => new { Classification = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ToList();
+
+            string dominantLabel;
+            double probability;
+            string description;
+
+            if (extremeCount == 0)
+            {
+                dominantLabel = "Normal";
+                probability = 100.0;
+                description = "Historical data shows consistently normal weather conditions for this date.";
+            }
+            else
+            {
+                var mostCommon = weatherCounts.FirstOrDefault(w => w.Classification != "Normal");
+                if (mostCommon != null && mostCommon.Count > 0)
+                {
+                    dominantLabel = mostCommon.Classification;
+                    probability = Math.Round((double)mostCommon.Count / totalObservations * 100.0, 2);
+                    description = GenerateDescription(dominantLabel, mostCommon.Count, totalObservations);
+                }
+                else
+                {
+                    dominantLabel = "Normal";
+                    probability = Math.Round((double)(totalObservations - extremeCount) / totalObservations * 100.0, 2);
+                    description = "Historical data shows primarily normal weather conditions for this date.";
+                }
+            }
+
             var stats = CalculateStats(relevantData);
 
-            return (weatherType.ToString(), probability, totalObservations, description, stats, matchingDays);
+            return (dominantLabel, probability, totalObservations, description, stats, allDays, extremeCount);
         }
 
-        private (int count, double threshold, string description, List<MatchingWeatherDay> matchingDays) CountConditionMatches(
-            List<WeatherData> data, WeatherType weatherType, double? userThreshold)
+        private string ClassifyWeather(WeatherData data)
         {
-            return weatherType switch
+            var conditions = new List<string>();
+
+            if (data.Temperature.HasValue)
             {
-                WeatherType.VeryHot => CountHotDays(data, userThreshold ?? 35.0),
-                WeatherType.VeryCold => CountColdDays(data, userThreshold ?? 5.0),
-                WeatherType.VeryWet => CountWetDays(data, userThreshold ?? 10.0),
-                WeatherType.VeryWindy => CountWindyDays(data, userThreshold ?? 10.0),
-                _ => (0, 0.0, "Unknown weather type", new List<MatchingWeatherDay>())
+                if (data.Temperature.Value > HOT_THRESHOLD)
+                    conditions.Add("VeryHot");
+                else if (data.Temperature.Value < COLD_THRESHOLD)
+                    conditions.Add("VeryCold");
+            }
+
+            if (data.Precipitation.HasValue && data.Precipitation.Value > WET_THRESHOLD)
+                conditions.Add("VeryWet");
+
+            if (data.WindSpeed.HasValue && data.WindSpeed.Value > WINDY_THRESHOLD)
+                conditions.Add("VeryWindy");
+
+            if (conditions.Count == 0)
+                return "Normal";
+
+            // If multiple conditions, return the most significant
+            if (conditions.Contains("VeryHot")) return "VeryHot";
+            if (conditions.Contains("VeryCold")) return "VeryCold";
+            if (conditions.Contains("VeryWet")) return "VeryWet";
+            if (conditions.Contains("VeryWindy")) return "VeryWindy";
+
+            return "Normal";
+        }
+
+        private string GenerateDescription(string classification, int count, int total)
+        {
+            var percentage = Math.Round((double)count / total * 100.0, 1);
+
+            return classification switch
+            {
+                "VeryHot" => $"Historical data shows {percentage}% probability of very hot conditions (>35°C) on this date across {total} years.",
+                "VeryCold" => $"Historical data shows {percentage}% probability of very cold conditions (<5°C) on this date across {total} years.",
+                "VeryWet" => $"Historical data shows {percentage}% probability of heavy rainfall (>10mm) on this date across {total} years.",
+                "VeryWindy" => $"Historical data shows {percentage}% probability of strong winds (>10 m/s) on this date across {total} years.",
+                _ => $"Historical data analysis based on {total} years of observations."
             };
-        }
-
-        private (int count, double threshold, string description, List<MatchingWeatherDay> matchingDays) CountHotDays(List<WeatherData> data, double threshold)
-        {
-            var matchingDays = data
-                .Where(d => d.Temperature.HasValue && d.Temperature.Value > threshold)
-                .Select(d => new MatchingWeatherDay
-                {
-                    Date = d.Date,
-                    Year = d.Date.Year,
-                    Value = d.Temperature!.Value,
-                    Threshold = threshold,
-                    WeatherType = "VeryHot",
-                    Unit = "°C",
-                    Context = new WeatherDayContext
-                    {
-                        Temperature = d.Temperature,
-                        Precipitation = d.Precipitation,
-                        WindSpeed = d.WindSpeed,
-                        Humidity = d.Humidity
-                    }
-                })
-                .OrderByDescending(d => d.Value)
-                .ToList();
-
-            return (matchingDays.Count, threshold, $"Probability of temperature exceeding {threshold}°C", matchingDays);
-        }
-
-        private (int count, double threshold, string description, List<MatchingWeatherDay> matchingDays) CountColdDays(List<WeatherData> data, double threshold)
-        {
-            var matchingDays = data
-                .Where(d => d.Temperature.HasValue && d.Temperature.Value < threshold)
-                .Select(d => new MatchingWeatherDay
-                {
-                    Date = d.Date,
-                    Year = d.Date.Year,
-                    Value = d.Temperature!.Value,
-                    Threshold = threshold,
-                    WeatherType = "VeryCold",
-                    Unit = "°C",
-                    Context = new WeatherDayContext
-                    {
-                        Temperature = d.Temperature,
-                        Precipitation = d.Precipitation,
-                        WindSpeed = d.WindSpeed,
-                        Humidity = d.Humidity
-                    }
-                })
-                .OrderBy(d => d.Value)
-                .ToList();
-
-            return (matchingDays.Count, threshold, $"Probability of temperature dropping below {threshold}°C", matchingDays);
-        }
-
-        private (int count, double threshold, string description, List<MatchingWeatherDay> matchingDays) CountWetDays(List<WeatherData> data, double threshold)
-        {
-            var matchingDays = data
-                .Where(d => d.Precipitation.HasValue && d.Precipitation.Value > threshold)
-                .Select(d => new MatchingWeatherDay
-                {
-                    Date = d.Date,
-                    Year = d.Date.Year,
-                    Value = d.Precipitation!.Value,
-                    Threshold = threshold,
-                    WeatherType = "VeryWet",
-                    Unit = "mm",
-                    Context = new WeatherDayContext
-                    {
-                        Temperature = d.Temperature,
-                        Precipitation = d.Precipitation,
-                        WindSpeed = d.WindSpeed,
-                        Humidity = d.Humidity
-                    }
-                })
-                .OrderByDescending(d => d.Value)
-                .ToList();
-
-            return (matchingDays.Count, threshold, $"Probability of precipitation exceeding {threshold} mm", matchingDays);
-        }
-
-        private (int count, double threshold, string description, List<MatchingWeatherDay> matchingDays) CountWindyDays(List<WeatherData> data, double threshold)
-        {
-            var matchingDays = data
-                .Where(d => d.WindSpeed.HasValue && d.WindSpeed.Value > threshold)
-                .Select(d => new MatchingWeatherDay
-                {
-                    Date = d.Date,
-                    Year = d.Date.Year,
-                    Value = d.WindSpeed!.Value,
-                    Threshold = threshold,
-                    WeatherType = "VeryWindy",
-                    Unit = "m/s",
-                    Context = new WeatherDayContext
-                    {
-                        Temperature = d.Temperature,
-                        Precipitation = d.Precipitation,
-                        WindSpeed = d.WindSpeed,
-                        Humidity = d.Humidity
-                    }
-                })
-                .OrderByDescending(d => d.Value)
-                .ToList();
-
-            return (matchingDays.Count, threshold, $"Probability of wind speed exceeding {threshold} m/s", matchingDays);
         }
 
         private WeatherStats CalculateStats(List<WeatherData> data)

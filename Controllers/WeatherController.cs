@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using ParadeGuard.Api.Models;
-using ParadeGuard.Api.Services;
 using ParadeGuard.Api.Services.Interfaces;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
@@ -32,22 +31,23 @@ namespace ParadeGuard.Api.Controllers
         }
 
         /// <summary>
-        /// Check weather probability for a specific date and location
+        /// Check weather prediction for a specific date and coordinates
+        /// Automatically fetches 40 years of historical data and classifies weather conditions
         /// </summary>
-        /// <param name="query">Weather query parameters</param>
-        /// <returns>Weather prediction result with historical matching days</returns>
-        [HttpPost("check")]
+        /// <param name="query">Weather query with coordinates and optional target date</param>
+        /// <returns>Weather prediction with full 40-year historical data</returns>
+        [HttpPost("predict")]
         [ProducesResponseType(typeof(WeatherResult), 200)]
         [ProducesResponseType(typeof(ApiError), 400)]
         [ProducesResponseType(typeof(ApiError), 429)]
         [ProducesResponseType(typeof(ApiError), 500)]
         [ProducesResponseType(typeof(ApiError), 503)]
-        public async Task<IActionResult> CheckWeather([FromBody] UserQuery query)
+        public async Task<IActionResult> PredictWeather([FromBody] UserQuery query)
         {
             var stopwatch = Stopwatch.StartNew();
             var requestId = HttpContext.TraceIdentifier;
 
-            _logger.LogInformation("Weather check request started. RequestId: {RequestId}", requestId);
+            _logger.LogInformation("Weather prediction request started. RequestId: {RequestId}", requestId);
 
             if (query == null)
             {
@@ -59,7 +59,7 @@ namespace ParadeGuard.Api.Controllers
                 });
             }
 
-            // Enhanced validation
+            // Validate input
             var validationResults = new List<ValidationResult>();
             var validationContext = new ValidationContext(query);
 
@@ -77,21 +77,25 @@ namespace ParadeGuard.Api.Controllers
                 });
             }
 
+            // Check if either LocationName or coordinates are provided
             if (!query.IsValid())
             {
-                _logger.LogWarning("Invalid query structure for RequestId: {RequestId}", requestId);
+                _logger.LogWarning("Invalid query: neither location name nor coordinates provided. RequestId: {RequestId}", requestId);
                 return BadRequest(new ApiError
                 {
-                    Message = "Provide either LocationName or both Latitude and Longitude",
+                    Message = "Please provide either a location name OR both latitude and longitude",
                     RequestId = requestId
                 });
             }
 
-            // Validate target date
-            if (query.TargetDate < DateTime.Today)
+            var targetDate = query.GetEffectiveTargetDate();
+            double lat, lon;
+
+            // Validate target date (cannot be in past, max 1 year in future)
+            if (targetDate < DateTime.Today)
             {
                 _logger.LogWarning("Past date provided for RequestId: {RequestId}. Date: {Date}",
-                    requestId, query.TargetDate);
+                    requestId, targetDate);
                 return BadRequest(new ApiError
                 {
                     Message = "Target date cannot be in the past",
@@ -99,10 +103,10 @@ namespace ParadeGuard.Api.Controllers
                 });
             }
 
-            if (query.TargetDate > DateTime.Today.AddYears(1))
+            if (targetDate > DateTime.Today.AddYears(1))
             {
                 _logger.LogWarning("Date too far in future for RequestId: {RequestId}. Date: {Date}",
-                    requestId, query.TargetDate);
+                    requestId, targetDate);
                 return BadRequest(new ApiError
                 {
                     Message = "Target date cannot be more than 1 year in the future",
@@ -112,8 +116,7 @@ namespace ParadeGuard.Api.Controllers
 
             try
             {
-                // Get coordinates
-                double lat, lon;
+                // Get coordinates - either from input or by geocoding
                 if (query.Latitude.HasValue && query.Longitude.HasValue)
                 {
                     lat = query.Latitude.Value;
@@ -123,6 +126,7 @@ namespace ParadeGuard.Api.Controllers
                 }
                 else
                 {
+                    // Geocode the location name
                     _logger.LogDebug("Geocoding location: {Location}. RequestId: {RequestId}",
                         query.LocationName, requestId);
                     (lat, lon) = await _geocodingService.GetCoordinatesAsync(query.LocationName!);
@@ -130,10 +134,9 @@ namespace ParadeGuard.Api.Controllers
                         lat, lon, requestId);
                 }
 
-                // Get historical weather data
-                _logger.LogDebug("Fetching historical weather data for {Years} years. RequestId: {RequestId}",
-                    query.Years, requestId);
-                var historicalData = await _nasaWeatherService.GetHistoricalDataAsync(lat, lon, query.Years);
+                // Always fetch 40 years of historical data
+                _logger.LogDebug("Fetching 40 years of historical weather data. RequestId: {RequestId}", requestId);
+                var historicalData = await _nasaWeatherService.GetHistoricalDataAsync(lat, lon, 40);
 
                 if (historicalData.Count == 0)
                 {
@@ -145,40 +148,40 @@ namespace ParadeGuard.Api.Controllers
                     });
                 }
 
-                // Calculate probability and get matching days
-                _logger.LogDebug("Calculating probability for {WeatherType}. RequestId: {RequestId}",
-                    query.WeatherType, requestId);
-                var (label, probability, observations, description, stats, matchingDays) = _probabilityCalculator.Calculate(
-                    historicalData, query.TargetDate, query.WeatherType, query.Threshold);
+                // Automatic classification and probability calculation
+                _logger.LogDebug("Performing automatic weather classification. RequestId: {RequestId}", requestId);
+                var (label, probability, observations, description, stats, allDays, extremeCount) =
+                    _probabilityCalculator.CalculateAutomatic(historicalData, targetDate);
 
                 stopwatch.Stop();
 
                 var result = new WeatherResult
                 {
                     Location = query.LocationName ?? $"{lat:F4}, {lon:F4}",
-                    Date = query.TargetDate,
+                    Date = targetDate,
                     Prediction = label,
                     Probability = probability,
                     Observations = observations,
                     Description = description,
                     Stats = stats,
-                    MatchingDays = matchingDays,
+                    AllDays = allDays,
+                    ExtremeWeatherDaysCount = extremeCount,
                     ProcessingTimeMs = stopwatch.ElapsedMilliseconds,
                     RequestId = requestId
                 };
 
-                _logger.LogInformation("Weather check completed successfully. RequestId: {RequestId}, " +
-                    "Location: {Location}, Date: {Date}, Probability: {Probability}%, ProcessingTime: {ProcessingTime}ms, " +
-                    "MatchingDays: {MatchingDaysCount}",
-                    requestId, result.Location, query.TargetDate.ToString("yyyy-MM-dd"),
-                    probability, stopwatch.ElapsedMilliseconds, matchingDays.Count);
+                _logger.LogInformation("Weather prediction completed successfully. RequestId: {RequestId}, " +
+                    "Location: {Location}, Date: {Date}, Prediction: {Prediction}, Probability: {Probability}%, " +
+                    "ProcessingTime: {ProcessingTime}ms, TotalDays: {TotalDays}, ExtremeDays: {ExtremeDays}",
+                    requestId, result.Location, targetDate.ToString("yyyy-MM-dd"),
+                    label, probability, stopwatch.ElapsedMilliseconds, allDays.Count, extremeCount);
 
                 return Ok(result);
             }
             catch (ArgumentException ex)
             {
                 stopwatch.Stop();
-                _logger.LogWarning(ex, "Invalid argument in weather check request. RequestId: {RequestId}", requestId);
+                _logger.LogWarning(ex, "Invalid argument in weather prediction request. RequestId: {RequestId}", requestId);
                 return BadRequest(new ApiError
                 {
                     Message = ex.Message,
@@ -188,7 +191,7 @@ namespace ParadeGuard.Api.Controllers
             catch (InvalidOperationException ex)
             {
                 stopwatch.Stop();
-                _logger.LogError(ex, "Operation error during weather check. RequestId: {RequestId}", requestId);
+                _logger.LogError(ex, "Operation error during weather prediction. RequestId: {RequestId}", requestId);
                 return StatusCode(503, new ApiError
                 {
                     Message = ex.Message,
@@ -198,7 +201,7 @@ namespace ParadeGuard.Api.Controllers
             catch (HttpRequestException ex)
             {
                 stopwatch.Stop();
-                _logger.LogError(ex, "HTTP error during weather check. RequestId: {RequestId}", requestId);
+                _logger.LogError(ex, "HTTP error during weather prediction. RequestId: {RequestId}", requestId);
                 return StatusCode(503, new ApiError
                 {
                     Message = "External service temporarily unavailable",
@@ -208,7 +211,7 @@ namespace ParadeGuard.Api.Controllers
             catch (Exception ex)
             {
                 stopwatch.Stop();
-                _logger.LogError(ex, "Unexpected error during weather check. RequestId: {RequestId}", requestId);
+                _logger.LogError(ex, "Unexpected error during weather prediction. RequestId: {RequestId}", requestId);
                 return StatusCode(500, new ApiError
                 {
                     Message = "An unexpected error occurred",
@@ -218,49 +221,44 @@ namespace ParadeGuard.Api.Controllers
         }
 
         /// <summary>
-        /// Get available weather types for prediction
+        /// Get classification thresholds used by the system
         /// </summary>
-        /// <returns>List of available weather types</returns>
-        [HttpGet("weather-types")]
-        [ProducesResponseType(typeof(IEnumerable<object>), 200)]
-        public IActionResult GetWeatherTypes()
+        [HttpGet("thresholds")]
+        [ProducesResponseType(typeof(object), 200)]
+        public IActionResult GetThresholds()
         {
-            var weatherTypes = Enum.GetValues<WeatherType>()
-                .Select(wt => new
+            return Ok(new
+            {
+                temperature = new
                 {
-                    Value = (int)wt,
-                    Name = wt.ToString(),
-                    Description = wt switch
-                    {
-                        WeatherType.VeryHot => "Temperature exceeding threshold (default: 35°C)",
-                        WeatherType.VeryCold => "Temperature below threshold (default: 5°C)",
-                        WeatherType.VeryWet => "Precipitation exceeding threshold (default: 10mm)",
-                        WeatherType.VeryWindy => "Wind speed exceeding threshold (default: 10 m/s)",
-                        _ => "Unknown weather type"
-                    }
-                });
-
-            return Ok(weatherTypes);
+                    veryHot = new { value = 35.0, unit = "°C", description = "Temperature exceeding 35°C" },
+                    veryCold = new { value = 5.0, unit = "°C", description = "Temperature below 5°C" }
+                },
+                precipitation = new
+                {
+                    veryWet = new { value = 10.0, unit = "mm", description = "Precipitation exceeding 10mm" }
+                },
+                wind = new
+                {
+                    veryWindy = new { value = 10.0, unit = "m/s", description = "Wind speed exceeding 10 m/s" }
+                }
+            });
         }
 
         /// <summary>
-        /// Health check endpoint for the weather service
+        /// Health check endpoint
         /// </summary>
-        /// <returns>Service health status</returns>
         [HttpGet("health")]
         [ProducesResponseType(typeof(object), 200)]
         public IActionResult Health()
         {
-            var requestId = HttpContext.TraceIdentifier;
-
             return Ok(new
             {
                 status = "healthy",
                 timestamp = DateTime.UtcNow,
-                service = "ParadeGuard Weather API",
-                version = "1.0",
-                requestId = requestId,
-                environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Unknown"
+                service = "Weather Prediction API",
+                version = "2.0",
+                requestId = HttpContext.TraceIdentifier
             });
         }
     }
