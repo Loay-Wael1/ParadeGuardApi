@@ -5,23 +5,57 @@ namespace ParadeGuard.Api.Services
 {
     public class ProbabilityCalculator : IProbabilityCalculator
     {
-        // Fixed thresholds for automatic classification
-        private const double HOT_THRESHOLD = 35.0;   // °C
-        private const double COLD_THRESHOLD = 5.0;   // °C
-        private const double WET_THRESHOLD = 10.0;   // mm
-        private const double WINDY_THRESHOLD = 10.0; // m/s
+        private const double HOT_THRESHOLD = 35.0;
+        private const double COLD_THRESHOLD = 5.0;
+        private const double WET_THRESHOLD = 10.0;
+        private const double WINDY_THRESHOLD = 10.0;
 
+        
         public (string label, double probability, int observations, string description,
                 WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
             CalculateAutomatic(List<WeatherData> historical, DateTime targetDate)
         {
-            // Filter data for the same month/day across all years
-            var relevantData = historical
-                .Where(d => d.Date.Month == targetDate.Month && d.Date.Day == targetDate.Day)
-                .OrderByDescending(d => d.Date.Year)
-                .ToList();
+            var targetMonth = targetDate.Month;
+            var targetDay = targetDate.Day;
 
-            var totalObservations = relevantData.Count;
+            // Pre-allocate with expected size (40 years max)
+            var allDays = new List<HistoricalWeatherDay>(40);
+            var temperatures = new List<double>(40);
+            var precipitations = new List<double>(40);
+            var windSpeeds = new List<double>(40);
+            var humidities = new List<double>(40);
+
+         
+            foreach (var data in historical)
+            {
+                // Filter inline: only process matching dates
+                if (data.Date.Month != targetMonth || data.Date.Day != targetDay)
+                    continue;
+
+                // Classify weather
+                var classification = ClassifyWeather(data);
+
+                // Build historical day record
+                allDays.Add(new HistoricalWeatherDay
+                {
+                    Date = data.Date,
+                    Year = data.Date.Year,
+                    Temperature = data.Temperature,
+                    Precipitation = data.Precipitation,
+                    WindSpeed = data.WindSpeed,
+                    Humidity = data.Humidity,
+                    Classification = classification,
+                    IsExtremeWeather = classification != "Normal"
+                });
+
+                // Collect stats data (avoiding multiple passes)
+                if (data.Temperature.HasValue) temperatures.Add(data.Temperature.Value);
+                if (data.Precipitation.HasValue) precipitations.Add(data.Precipitation.Value);
+                if (data.WindSpeed.HasValue) windSpeeds.Add(data.WindSpeed.Value);
+                if (data.Humidity.HasValue) humidities.Add(data.Humidity.Value);
+            }
+
+            var totalObservations = allDays.Count;
 
             if (totalObservations == 0)
             {
@@ -29,31 +63,25 @@ namespace ParadeGuard.Api.Services
                        null, new List<HistoricalWeatherDay>(), 0);
             }
 
-            // Convert all days to HistoricalWeatherDay with automatic classification
-            var allDays = relevantData.Select(d => {
-                var classification = ClassifyWeather(d);
-                return new HistoricalWeatherDay
-                {
-                    Date = d.Date,
-                    Year = d.Date.Year,
-                    Temperature = d.Temperature,
-                    Precipitation = d.Precipitation,
-                    WindSpeed = d.WindSpeed,
-                    Humidity = d.Humidity,
-                    Classification = classification,
-                    IsExtremeWeather = classification != "Normal"
-                };
-            }).ToList();
-
-            // Count extreme weather occurrences
-            var extremeWeatherDays = allDays.Where(d => d.IsExtremeWeather).ToList();
-            var extremeCount = extremeWeatherDays.Count;
+            // Count extreme weather (single pass)
+            var extremeCount = 0;
+            foreach (var day in allDays)
+            {
+                if (day.IsExtremeWeather)
+                    extremeCount++;
+            }
 
             // Determine dominant weather pattern
-            var weatherCounts = allDays
-                .GroupBy(d => d.Classification)
-                .Select(g => new { Classification = g.Key, Count = g.Count() })
-                .OrderByDescending(x => x.Count)
+            var weatherCounts = new Dictionary<string, int>(5);
+            foreach (var day in allDays)
+            {
+                if (!weatherCounts.ContainsKey(day.Classification))
+                    weatherCounts[day.Classification] = 0;
+                weatherCounts[day.Classification]++;
+            }
+
+            var sortedCounts = weatherCounts
+                .OrderByDescending(kvp => kvp.Value)
                 .ToList();
 
             string dominantLabel;
@@ -68,12 +96,12 @@ namespace ParadeGuard.Api.Services
             }
             else
             {
-                var mostCommon = weatherCounts.FirstOrDefault(w => w.Classification != "Normal");
-                if (mostCommon != null && mostCommon.Count > 0)
+                var mostCommon = sortedCounts.FirstOrDefault(kvp => kvp.Key != "Normal");
+                if (mostCommon.Value > 0)
                 {
-                    dominantLabel = mostCommon.Classification;
-                    probability = Math.Round((double)mostCommon.Count / totalObservations * 100.0, 2);
-                    description = GenerateDescription(dominantLabel, mostCommon.Count, totalObservations);
+                    dominantLabel = mostCommon.Key;
+                    probability = Math.Round((double)mostCommon.Value / totalObservations * 100.0, 2);
+                    description = GenerateDescription(dominantLabel, mostCommon.Value, totalObservations);
                 }
                 else
                 {
@@ -83,37 +111,28 @@ namespace ParadeGuard.Api.Services
                 }
             }
 
-            var stats = CalculateStats(relevantData);
+            var stats = CalculateStatsOptimized(temperatures, precipitations, windSpeeds, humidities);
 
             return (dominantLabel, probability, totalObservations, description, stats, allDays, extremeCount);
         }
 
+        /// <summary>
+        /// OPTIMIZED: Priority-based classification (avoids list allocations)
+        /// </summary>
         private string ClassifyWeather(WeatherData data)
         {
-            var conditions = new List<string>();
+            // Check in priority order (most severe first)
+            if (data.Temperature.HasValue && data.Temperature.Value > HOT_THRESHOLD)
+                return "VeryHot";
 
-            if (data.Temperature.HasValue)
-            {
-                if (data.Temperature.Value > HOT_THRESHOLD)
-                    conditions.Add("VeryHot");
-                else if (data.Temperature.Value < COLD_THRESHOLD)
-                    conditions.Add("VeryCold");
-            }
+            if (data.Temperature.HasValue && data.Temperature.Value < COLD_THRESHOLD)
+                return "VeryCold";
 
             if (data.Precipitation.HasValue && data.Precipitation.Value > WET_THRESHOLD)
-                conditions.Add("VeryWet");
+                return "VeryWet";
 
             if (data.WindSpeed.HasValue && data.WindSpeed.Value > WINDY_THRESHOLD)
-                conditions.Add("VeryWindy");
-
-            if (conditions.Count == 0)
-                return "Normal";
-
-            // If multiple conditions, return the most significant
-            if (conditions.Contains("VeryHot")) return "VeryHot";
-            if (conditions.Contains("VeryCold")) return "VeryCold";
-            if (conditions.Contains("VeryWet")) return "VeryWet";
-            if (conditions.Contains("VeryWindy")) return "VeryWindy";
+                return "VeryWindy";
 
             return "Normal";
         }
@@ -132,24 +151,62 @@ namespace ParadeGuard.Api.Services
             };
         }
 
-        private WeatherStats CalculateStats(List<WeatherData> data)
+        /// <summary>
+        /// OPTIMIZED: Direct calculation from collected lists (no LINQ overhead)
+        /// </summary>
+        private WeatherStats CalculateStatsOptimized(
+            List<double> temperatures,
+            List<double> precipitations,
+            List<double> windSpeeds,
+            List<double> humidities)
         {
-            var temperatures = data.Where(d => d.Temperature.HasValue).Select(d => d.Temperature!.Value);
-            var precipitation = data.Where(d => d.Precipitation.HasValue).Select(d => d.Precipitation!.Value);
-            var windSpeeds = data.Where(d => d.WindSpeed.HasValue).Select(d => d.WindSpeed!.Value);
-            var humidity = data.Where(d => d.Humidity.HasValue).Select(d => d.Humidity!.Value);
-
             return new WeatherStats
             {
-                AverageTemperature = temperatures.Any() ? Math.Round(temperatures.Average(), 2) : null,
-                AveragePrecipitation = precipitation.Any() ? Math.Round(precipitation.Average(), 2) : null,
-                AverageWindSpeed = windSpeeds.Any() ? Math.Round(windSpeeds.Average(), 2) : null,
-                AverageHumidity = humidity.Any() ? Math.Round(humidity.Average(), 2) : null,
-                MinTemperature = temperatures.Any() ? Math.Round(temperatures.Min(), 2) : null,
-                MaxTemperature = temperatures.Any() ? Math.Round(temperatures.Max(), 2) : null,
-                MaxPrecipitation = precipitation.Any() ? Math.Round(precipitation.Max(), 2) : null,
-                MaxWindSpeed = windSpeeds.Any() ? Math.Round(windSpeeds.Max(), 2) : null
+                AverageTemperature = CalculateAverage(temperatures),
+                AveragePrecipitation = CalculateAverage(precipitations),
+                AverageWindSpeed = CalculateAverage(windSpeeds),
+                AverageHumidity = CalculateAverage(humidities),
+                MinTemperature = CalculateMin(temperatures),
+                MaxTemperature = CalculateMax(temperatures),
+                MaxPrecipitation = CalculateMax(precipitations),
+                MaxWindSpeed = CalculateMax(windSpeeds)
             };
+        }
+
+        private double? CalculateAverage(List<double> values)
+        {
+            if (values.Count == 0) return null;
+
+            double sum = 0;
+            for (int i = 0; i < values.Count; i++)
+            {
+                sum += values[i];
+            }
+            return Math.Round(sum / values.Count, 2);
+        }
+
+        private double? CalculateMin(List<double> values)
+        {
+            if (values.Count == 0) return null;
+
+            double min = values[0];
+            for (int i = 1; i < values.Count; i++)
+            {
+                if (values[i] < min) min = values[i];
+            }
+            return Math.Round(min, 2);
+        }
+
+        private double? CalculateMax(List<double> values)
+        {
+            if (values.Count == 0) return null;
+
+            double max = values[0];
+            for (int i = 1; i < values.Count; i++)
+            {
+                if (values[i] > max) max = values[i];
+            }
+            return Math.Round(max, 2);
         }
     }
 }

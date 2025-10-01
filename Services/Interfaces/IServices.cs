@@ -7,8 +7,13 @@ namespace ParadeGuard.Api.Services.Interfaces
         Task<(double lat, double lon)> GetCoordinatesAsync(string place);
     }
 
+ 
     public interface INasaWeatherService
     {
+        /// <summary>
+        /// Gets historical weather data - maintains existing signature for backward compatibility
+        /// Internally optimized with streaming JSON parsing
+        /// </summary>
         Task<List<WeatherData>> GetHistoricalDataAsync(double lat, double lon, int years);
     }
 
@@ -18,4 +23,6 @@ namespace ParadeGuard.Api.Services.Interfaces
          WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
         CalculateAutomatic(List<WeatherData> historical, DateTime targetDate);
     }
+
+   
 }
