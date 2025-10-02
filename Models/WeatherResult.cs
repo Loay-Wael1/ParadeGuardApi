@@ -6,10 +6,24 @@ namespace ParadeGuard.Api.Models
     {
         public string Location { get; set; } = "";
         public DateTime Date { get; set; }
+
+        /// <summary>
+        /// Dominant weather classification (backward compatible)
+        /// </summary>
         public string Prediction { get; set; } = "";
 
+        /// <summary>
+        /// Probability of the dominant classification (backward compatible)
+        /// </summary>
         [JsonPropertyName("probabilityPercent")]
         public double Probability { get; set; }
+
+        /// <summary>
+        /// NEW: Comprehensive breakdown of probabilities for all weather classifications
+        /// Provides percentage likelihood for each weather type based on historical data
+        /// </summary>
+        [JsonPropertyName("probabilities")]
+        public Dictionary<string, double> Probabilities { get; set; } = new();
 
         public int Observations { get; set; }
         public string Description { get; set; } = "";

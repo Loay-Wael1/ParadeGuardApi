@@ -10,9 +10,13 @@ namespace ParadeGuard.Api.Services
         private const double WET_THRESHOLD = 10.0;
         private const double WINDY_THRESHOLD = 10.0;
 
-        
+        /// <summary>
+        /// Calculates weather probabilities with comprehensive classification breakdown
+        /// Returns dominant classification along with probabilities for all weather types
+        /// </summary>
         public (string label, double probability, int observations, string description,
-                WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
+                WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount,
+                Dictionary<string, double> allProbabilities)
             CalculateAutomatic(List<WeatherData> historical, DateTime targetDate)
         {
             var targetMonth = targetDate.Month;
@@ -25,7 +29,6 @@ namespace ParadeGuard.Api.Services
             var windSpeeds = new List<double>(40);
             var humidities = new List<double>(40);
 
-         
             foreach (var data in historical)
             {
                 // Filter inline: only process matching dates
@@ -60,26 +63,36 @@ namespace ParadeGuard.Api.Services
             if (totalObservations == 0)
             {
                 return ("NoData", 0.0, 0, "No historical data available for this date.",
-                       null, new List<HistoricalWeatherDay>(), 0);
+                       null, new List<HistoricalWeatherDay>(), 0,
+                       new Dictionary<string, double>());
             }
 
-            // Count extreme weather (single pass)
+            // Count all classifications in a single pass
+            var weatherCounts = new Dictionary<string, int>
+            {
+                { "VeryHot", 0 },
+                { "VeryCold", 0 },
+                { "VeryWet", 0 },
+                { "VeryWindy", 0 },
+                { "Normal", 0 }
+            };
+
             var extremeCount = 0;
             foreach (var day in allDays)
             {
+                weatherCounts[day.Classification]++;
                 if (day.IsExtremeWeather)
                     extremeCount++;
             }
 
-            // Determine dominant weather pattern
-            var weatherCounts = new Dictionary<string, int>(5);
-            foreach (var day in allDays)
+            // Calculate probabilities for all classifications
+            var allProbabilities = new Dictionary<string, double>();
+            foreach (var kvp in weatherCounts)
             {
-                if (!weatherCounts.ContainsKey(day.Classification))
-                    weatherCounts[day.Classification] = 0;
-                weatherCounts[day.Classification]++;
+                allProbabilities[kvp.Key] = Math.Round((double)kvp.Value / totalObservations * 100.0, 2);
             }
 
+            // Determine dominant weather pattern
             var sortedCounts = weatherCounts
                 .OrderByDescending(kvp => kvp.Value)
                 .ToList();
@@ -100,24 +113,26 @@ namespace ParadeGuard.Api.Services
                 if (mostCommon.Value > 0)
                 {
                     dominantLabel = mostCommon.Key;
-                    probability = Math.Round((double)mostCommon.Value / totalObservations * 100.0, 2);
+                    probability = allProbabilities[dominantLabel];
                     description = GenerateDescription(dominantLabel, mostCommon.Value, totalObservations);
                 }
                 else
                 {
                     dominantLabel = "Normal";
-                    probability = Math.Round((double)(totalObservations - extremeCount) / totalObservations * 100.0, 2);
+                    probability = allProbabilities["Normal"];
                     description = "Historical data shows primarily normal weather conditions for this date.";
                 }
             }
 
             var stats = CalculateStatsOptimized(temperatures, precipitations, windSpeeds, humidities);
 
-            return (dominantLabel, probability, totalObservations, description, stats, allDays, extremeCount);
+            return (dominantLabel, probability, totalObservations, description, stats,
+                    allDays, extremeCount, allProbabilities);
         }
 
         /// <summary>
-        /// OPTIMIZED: Priority-based classification (avoids list allocations)
+        /// Priority-based classification (avoids list allocations)
+        /// Classifies weather based on predefined thresholds
         /// </summary>
         private string ClassifyWeather(WeatherData data)
         {
@@ -152,7 +167,7 @@ namespace ParadeGuard.Api.Services
         }
 
         /// <summary>
-        /// OPTIMIZED: Direct calculation from collected lists (no LINQ overhead)
+        /// Direct calculation from collected lists (no LINQ overhead)
         /// </summary>
         private WeatherStats CalculateStatsOptimized(
             List<double> temperatures,

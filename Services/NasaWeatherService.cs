@@ -136,7 +136,7 @@ namespace ParadeGuard.Api.Services
         private string BuildNasaUrl(double lat, double lon, string start, string end)
         {
             var url = $"{_apiConfig.NasaBaseUrl}?start={start}&end={end}&latitude={lat:F4}&longitude={lon:F4}" +
-                      $"&parameters=T2M,PRECTOT,WS2M,RH2M&community=RE&format=JSON";
+                      $"&parameters=T2M,PRECTOTCORR,WS2M,RH2M&community=RE&format=JSON";
 
             if (!string.IsNullOrWhiteSpace(_apiKeys.NasaApiKey))
             {
@@ -166,7 +166,7 @@ namespace ParadeGuard.Api.Services
                 }
 
                 parameters.TryGetProperty("T2M", out var temperature);
-                parameters.TryGetProperty("PRECTOT", out var precipitation);
+                parameters.TryGetProperty("PRECTOTCORR", out var precipitation);
                 parameters.TryGetProperty("WS2M", out var windSpeed);
                 parameters.TryGetProperty("RH2M", out var humidity);
 

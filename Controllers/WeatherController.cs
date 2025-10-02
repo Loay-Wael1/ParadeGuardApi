@@ -36,6 +36,8 @@ namespace ParadeGuard.Api.Controllers
         /// </summary>
         /// <param name="query">Weather query with coordinates and optional target date</param>
         /// <returns>Weather prediction with full 40-year historical data</returns>
+        // Only showing the modified PredictWeather method - keep all other methods unchanged
+
         [HttpPost("predict")]
         [ProducesResponseType(typeof(WeatherResult), 200)]
         [ProducesResponseType(typeof(ApiError), 400)]
@@ -148,9 +150,9 @@ namespace ParadeGuard.Api.Controllers
                     });
                 }
 
-                // Automatic classification and probability calculation
+                // Automatic classification and probability calculation (now includes all probabilities)
                 _logger.LogDebug("Performing automatic weather classification. RequestId: {RequestId}", requestId);
-                var (label, probability, observations, description, stats, allDays, extremeCount) =
+                var (label, probability, observations, description, stats, allDays, extremeCount, allProbabilities) =
                     _probabilityCalculator.CalculateAutomatic(historicalData, targetDate);
 
                 stopwatch.Stop();
@@ -161,6 +163,7 @@ namespace ParadeGuard.Api.Controllers
                     Date = targetDate,
                     Prediction = label,
                     Probability = probability,
+                    Probabilities = allProbabilities, // NEW: Add comprehensive probability breakdown
                     Observations = observations,
                     Description = description,
                     Stats = stats,
@@ -172,9 +175,11 @@ namespace ParadeGuard.Api.Controllers
 
                 _logger.LogInformation("Weather prediction completed successfully. RequestId: {RequestId}, " +
                     "Location: {Location}, Date: {Date}, Prediction: {Prediction}, Probability: {Probability}%, " +
-                    "ProcessingTime: {ProcessingTime}ms, TotalDays: {TotalDays}, ExtremeDays: {ExtremeDays}",
+                    "ProcessingTime: {ProcessingTime}ms, TotalDays: {TotalDays}, ExtremeDays: {ExtremeDays}, " +
+                    "AllProbabilities: {AllProbabilities}",
                     requestId, result.Location, targetDate.ToString("yyyy-MM-dd"),
-                    label, probability, stopwatch.ElapsedMilliseconds, allDays.Count, extremeCount);
+                    label, probability, stopwatch.ElapsedMilliseconds, allDays.Count, extremeCount,
+                    string.Join(", ", allProbabilities.Select(kvp => $"{kvp.Key}={kvp.Value}%")));
 
                 return Ok(result);
             }

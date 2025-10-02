@@ -7,7 +7,6 @@ namespace ParadeGuard.Api.Services.Interfaces
         Task<(double lat, double lon)> GetCoordinatesAsync(string place);
     }
 
- 
     public interface INasaWeatherService
     {
         /// <summary>
@@ -20,9 +19,8 @@ namespace ParadeGuard.Api.Services.Interfaces
     public interface IProbabilityCalculator
     {
         (string label, double probability, int observations, string description,
-         WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount)
+         WeatherStats stats, List<HistoricalWeatherDay> allDays, int extremeCount,
+         Dictionary<string, double> allProbabilities)
         CalculateAutomatic(List<WeatherData> historical, DateTime targetDate);
     }
-
-   
 }
