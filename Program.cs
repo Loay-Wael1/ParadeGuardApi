@@ -62,6 +62,11 @@ namespace ParadeGuard.Api
                          Environment.GetEnvironmentVariable("NasaApiKey") ??
                          Environment.GetEnvironmentVariable("PARADE_GUARD_NASA_API_KEY");
 
+            var groqKey = apiKeysSection["GroqApiKey"] ??
+             Environment.GetEnvironmentVariable("GroqApiKey") ??
+             Environment.GetEnvironmentVariable("PARADE_GUARD_GROQ_API_KEY");
+
+
             // Validate both required API keys
             var missingKeys = new List<string>();
 
@@ -70,6 +75,10 @@ namespace ParadeGuard.Api
 
             if (string.IsNullOrWhiteSpace(nasaKey))
                 missingKeys.Add("NasaApiKey");
+
+            if (string.IsNullOrWhiteSpace(groqKey))
+                missingKeys.Add("GroqApiKey");
+
 
             if (missingKeys.Any())
             {
@@ -88,6 +97,8 @@ namespace ParadeGuard.Api
                 Console.WriteLine("  - PARADE_GUARD_GEOCODING_API_KEY");
                 Console.WriteLine("  - NasaApiKey");
                 Console.WriteLine("  - PARADE_GUARD_NASA_API_KEY");
+                Console.WriteLine("  - GroqApiKey"); 
+                Console.WriteLine("  - PARADE_GUARD_GROQ_API_KEY");  
                 Console.WriteLine("================================\n");
 
                 throw new InvalidOperationException($"Missing required API keys: {string.Join(", ", missingKeys)}");
@@ -98,9 +109,10 @@ namespace ParadeGuard.Api
             {
                 options.GeocodingApiKey = geocodingKey;
                 options.NasaApiKey = nasaKey;
+                options.GroqApiKey = groqKey;
             });
 
-            Log.Information("Both required API keys configured successfully - Geocoding: ?, NASA: ?");
+            Log.Information("All required API keys configured successfully - Geocoding: , NASA: , Groq: ");
 
             // Response compression
             builder.Services.AddResponseCompression(options =>

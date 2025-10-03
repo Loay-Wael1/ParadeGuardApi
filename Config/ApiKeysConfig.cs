@@ -6,6 +6,7 @@ namespace ParadeGuard.Api.Config
     {
         private string? _nasaApiKey;
         private string? _geocodingApiKey;
+        private string? _groqApiKey;
 
         [Required(ErrorMessage = "NASA API key is required")]
         public string NasaApiKey
@@ -25,12 +26,23 @@ namespace ParadeGuard.Api.Config
             set => _geocodingApiKey = value;
         }
 
+        [Required(ErrorMessage = "Groq API key is required")]
+        public string GroqApiKey
+        {
+            get => _groqApiKey ??
+                   Environment.GetEnvironmentVariable("PARADE_GUARD_GROQ_API_KEY") ??
+                   Environment.GetEnvironmentVariable("GroqApiKey") ?? "";
+            set => _groqApiKey = value;
+        }
+
         /// <summary>
         /// Validates that all required API keys are present
         /// </summary>
         public bool IsValid()
         {
-            return !string.IsNullOrWhiteSpace(GeocodingApiKey) && !string.IsNullOrWhiteSpace(NasaApiKey);
+            return !string.IsNullOrWhiteSpace(GeocodingApiKey) &&
+                   !string.IsNullOrWhiteSpace(NasaApiKey) &&
+                   !string.IsNullOrWhiteSpace(GroqApiKey);
         }
     }
 
